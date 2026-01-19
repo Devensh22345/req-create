@@ -1,21 +1,16 @@
-import os
 import logging
-from typing import Dict, List, Tuple
-from datetime import datetime
-
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    MessageHandler,
-    filters
-)
-from telegram.constants import ParseMode
 import sqlite3
-import secrets
-import string
+from datetime import datetime
+from typing import Dict, List, Optional
+
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup,
+    ParseMode, ReplyKeyboardRemove
+)
+from telegram.ext import (
+    Updater, CommandHandler, MessageHandler, Filters,
+    CallbackQueryHandler, ConversationHandler, CallbackContext
+)
 
 # Enable logging
 logging.basicConfig(
@@ -25,464 +20,410 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Database setup
-class Database:
-    def __init__(self):
-        self.conn = sqlite3.connect('bot_data.db', check_same_thread=False)
-        self.create_tables()
-    
-    def create_tables(self):
-        cursor = self.conn.cursor()
-        
-        # Post channels table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS post_channels (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                channel_id TEXT UNIQUE,
-                channel_name TEXT,
-                added_at TIMESTAMP
-            )
-        ''')
-        
-        # Req channels table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS req_channels (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                channel_id TEXT UNIQUE,
-                channel_name TEXT,
-                registered_at TIMESTAMP
-            )
-        ''')
-        
-        # Request links table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS request_links (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                req_channel_id TEXT,
-                post_channel_id TEXT,
-                link_token TEXT UNIQUE,
-                link_title TEXT,
-                created_at TIMESTAMP,
-                FOREIGN KEY (req_channel_id) REFERENCES req_channels (channel_id),
-                FOREIGN KEY (post_channel_id) REFERENCES post_channels (channel_id)
-            )
-        ''')
-        
-        # Bot owner table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS owner (
-                id INTEGER PRIMARY KEY,
-                user_id TEXT UNIQUE
-            )
-        ''')
-        
-        self.conn.commit()
-    
-    def add_owner(self, user_id: str):
-        cursor = self.conn.cursor()
-        cursor.execute('INSERT OR REPLACE INTO owner (id, user_id) VALUES (1, ?)', (user_id,))
-        self.conn.commit()
-    
-    def get_owner(self):
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT user_id FROM owner WHERE id = 1')
-        result = cursor.fetchone()
-        return result[0] if result else None
-    
-    def add_post_channel(self, channel_id: str, channel_name: str):
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            INSERT OR REPLACE INTO post_channels (channel_id, channel_name, added_at)
-            VALUES (?, ?, ?)
-        ''', (channel_id, channel_name, datetime.now()))
-        self.conn.commit()
-    
-    def get_post_channels(self):
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT channel_id, channel_name FROM post_channels')
-        return cursor.fetchall()
-    
-    def remove_post_channel(self, channel_id: str):
-        cursor = self.conn.cursor()
-        cursor.execute('DELETE FROM post_channels WHERE channel_id = ?', (channel_id,))
-        cursor.execute('DELETE FROM request_links WHERE post_channel_id = ?', (channel_id,))
-        self.conn.commit()
-    
-    def add_req_channel(self, channel_id: str, channel_name: str):
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            INSERT OR REPLACE INTO req_channels (channel_id, channel_name, registered_at)
-            VALUES (?, ?, ?)
-        ''', (channel_id, channel_name, datetime.now()))
-        self.conn.commit()
-    
-    def get_req_channel(self, channel_id: str):
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT channel_id, channel_name FROM req_channels WHERE channel_id = ?', (channel_id,))
-        return cursor.fetchone()
-    
-    def create_request_links(self, req_channel_id: str, req_channel_name: str, bot_username: str):
-        cursor = self.conn.cursor()
-        post_channels = self.get_post_channels()
-        
-        # Generate unique tokens for each request link
-        for post_channel_id, post_channel_name in post_channels:
-            token = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
-            
-            cursor.execute('''
-                INSERT OR REPLACE INTO request_links 
-                (req_channel_id, post_channel_id, link_token, link_title, created_at)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (req_channel_id, post_channel_id, token, post_channel_name, datetime.now()))
-        
-        self.conn.commit()
-        return len(post_channels)
-    
-    def get_request_links(self, req_channel_id: str, bot_username: str):
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            SELECT rl.link_token, rl.link_title, pc.channel_name
-            FROM request_links rl
-            JOIN post_channels pc ON rl.post_channel_id = pc.channel_id
-            WHERE rl.req_channel_id = ?
-        ''', (req_channel_id,))
-        
-        links = []
-        for token, title, post_channel_name in cursor.fetchall():
-            link = f"https://t.me/{bot_username}?start={token}"
-            links.append((link, title, post_channel_name))
-        return links
-    
-    def get_request_link_for_post(self, req_channel_id: str, post_channel_id: str, bot_username: str):
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            SELECT link_token FROM request_links 
-            WHERE req_channel_id = ? AND post_channel_id = ?
-        ''', (req_channel_id, post_channel_id))
-        
-        result = cursor.fetchone()
-        if result:
-            return f"https://t.me/{bot_username}?start={result[0]}"
-        return None
+DB_NAME = 'channels.db'
 
-# Initialize database
-db = Database()
-
-# Bot setup
-BOT_TOKEN = os.getenv('BOT_TOKEN', '7732000256:AAEhvG8504KcDrD0FZ44AEoiTEhEJjXuQfg')
-OWNER_ID = os.getenv('OWNER_ID', '6872968794')  # Replace with your Telegram user ID
-
-# Store bot username globally
-bot_username = None
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command with request link token."""
-    user = update.effective_user
-    args = context.args
-    
-    if args:
-        token = args[0]
-        # Handle the request link - in a real bot, you'd add user to channel here
-        await update.message.reply_text(
-            f"✅ Request link activated!\n"
-            f"Welcome {user.mention_html()}!\n\n"
-            f"This link was for a specific channel request.",
-            parse_mode=ParseMode.HTML
+def init_db():
+    """Initialize database"""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS channels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id TEXT UNIQUE,
+            channel_name TEXT,
+            added_date TIMESTAMP
         )
-    else:
-        await update.message.reply_text(
-            f"👋 Hello {user.mention_html()}!\n\n"
-            f"I'm a channel management bot.\n"
-            f"Use me in channels with appropriate commands.",
-            parse_mode=ParseMode.HTML
-        )
+    ''')
+    conn.commit()
+    conn.close()
 
-async def set_owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Set bot owner (run once)."""
-    user = update.effective_user
-    db.add_owner(str(user.id))
-    await update.message.reply_text("✅ You have been set as bot owner!")
+# Conversation states
+LINK, CHANNEL_SELECTION = range(2)
 
-async def add_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Add a post channel - /add <channel_id>"""
-    # Check if user is owner
-    owner_id = db.get_owner()
-    if str(update.effective_user.id) != owner_id:
-        await update.message.reply_text("❌ Only owner can use this command!")
-        return
-    
-    if not context.args:
-        await update.message.reply_text("Usage: /add <channel_id>\nExample: /add -1001234567890")
-        return
-    
-    channel_id = context.args[0]
-    
-    # Get channel info (bot must be in channel)
-    try:
-        chat = await context.bot.get_chat(channel_id)
-        db.add_post_channel(channel_id, chat.title)
+# Admin list (add your admin user IDs here)
+ADMIN_IDS = [8242413007]  # Replace with actual admin IDs, e.g., [123456789, 987654321]
+
+class ChannelBot:
+    def __init__(self, token: str):
+        self.updater = Updater(token)
+        self.dispatcher = self.updater.dispatcher
         
-        await update.message.reply_text(
-            f"✅ Channel added successfully!\n"
-            f"Name: {chat.title}\n"
-            f"ID: {channel_id}"
-        )
-    except Exception as e:
-        logger.error(f"Error adding channel: {e}")
-        await update.message.reply_text("❌ Failed to add channel. Make sure:\n1. Channel ID is correct\n2. Bot is added to channel\n3. Bot is admin in channel")
-
-async def list_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """List all post channels with inline buttons to remove."""
-    # Check if user is owner
-    owner_id = db.get_owner()
-    if str(update.effective_user.id) != owner_id:
-        await update.message.reply_text("❌ Only owner can use this command!")
-        return
-    
-    channels = db.get_post_channels()
-    
-    if not channels:
-        await update.message.reply_text("📭 No post channels added yet!")
-        return
-    
-    keyboard = []
-    for channel_id, channel_name in channels:
-        keyboard.append([
-            InlineKeyboardButton(
-                f"🗑 {channel_name}",
-                callback_data=f"remove_{channel_id}"
-            )
-        ])
-    
-    # Add a cancel button
-    keyboard.append([
-        InlineKeyboardButton("❌ Cancel", callback_data="cancel_list")
-    ])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        "📋 **Post Channels List**\n\n"
-        "Click on any channel to remove it from the list:",
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle inline button callbacks."""
-    query = update.callback_query
-    await query.answer()
-    
-    data = query.data
-    
-    if data.startswith("remove_"):
-        channel_id = data.split("_")[1]
-        db.remove_post_channel(channel_id)
+        # Initialize database
+        init_db()
         
-        await query.edit_message_text(
-            "✅ Channel removed successfully!",
-            reply_markup=None
+        # Register handlers
+        self.register_handlers()
+        
+    def register_handlers(self):
+        """Register all bot handlers"""
+        # Command handlers
+        self.dispatcher.add_handler(CommandHandler("start", self.start))
+        self.dispatcher.add_handler(CommandHandler("add", self.add_channel))
+        self.dispatcher.add_handler(CommandHandler("list", self.list_channels))
+        
+        # Conversation handler for /post command
+        conv_handler = ConversationHandler(
+            entry_points=[CommandHandler('post', self.post_start)],
+            states={
+                LINK: [MessageHandler(Filters.text & ~Filters.command, self.get_link)],
+                CHANNEL_SELECTION: [CallbackQueryHandler(self.channel_selection)]
+            },
+            fallbacks=[CommandHandler('cancel', self.cancel_post)]
         )
+        self.dispatcher.add_handler(conv_handler)
+        
+        # Callback query handler for removing channels
+        self.dispatcher.add_handler(CallbackQueryHandler(self.button_callback, pattern='^remove_'))
+        
+        # Error handler
+        self.dispatcher.add_error_handler(self.error_handler)
     
-    elif data == "cancel_list":
-        await query.edit_message_text(
-            "❌ Operation cancelled.",
-            reply_markup=None
-        )
-
-async def req_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /req command - create request links for the channel."""
-    # Check if command is sent in a channel
-    if update.effective_chat.type not in ['group', 'supergroup', 'channel']:
-        await update.message.reply_text("❌ This command can only be used in channels!")
-        return
+    def is_admin(self, user_id: int) -> bool:
+        """Check if user is admin"""
+        return user_id in ADMIN_IDS
     
-    # Check if user is admin
-    try:
-        chat_member = await context.bot.get_chat_member(
-            update.effective_chat.id,
-            update.effective_user.id
-        )
-        if chat_member.status not in ['creator', 'administrator']:
-            await update.message.reply_text("❌ Only admins can use this command!")
-            return
-    except Exception as e:
-        logger.error(f"Error checking admin status: {e}")
-        await update.message.reply_text("❌ Error checking permissions!")
-        return
-    
-    channel_id = str(update.effective_chat.id)
-    channel_name = update.effective_chat.title
-    
-    # Register or update req channel
-    db.add_req_channel(channel_id, channel_name)
-    
-    # Create request links
-    global bot_username
-    if not bot_username:
-        bot_username = (await context.bot.get_me()).username
-    
-    num_links = db.create_request_links(channel_id, channel_name, bot_username)
-    
-    # Get and display the links
-    links = db.get_request_links(channel_id, bot_username)
-    
-    message_text = f"🔗 **Request Links for {channel_name}**\n\n"
-    message_text += f"Created {num_links} request links:\n\n"
-    
-    for i, (link, title, post_channel_name) in enumerate(links, 1):
-        message_text += f"{i}. **{title}**\n`{link}`\n\n"
-    
-    await update.message.reply_text(
-        message_text,
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-async def send_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /send command - send posts to all post channels."""
-    # Check if command is sent in a req channel
-    if update.effective_chat.type not in ['group', 'supergroup', 'channel']:
-        await update.message.reply_text("❌ This command can only be used in channels!")
-        return
-    
-    # Check if user is admin
-    try:
-        chat_member = await context.bot.get_chat_member(
-            update.effective_chat.id,
-            update.effective_user.id
-        )
-        if chat_member.status not in ['creator', 'administrator']:
-            await update.message.reply_text("❌ Only admins can use this command!")
-            return
-    except Exception as e:
-        logger.error(f"Error checking admin status: {e}")
-        await update.message.reply_text("❌ Error checking permissions!")
-        return
-    
-    req_channel_id = str(update.effective_chat.id)
-    req_channel = db.get_req_channel(req_channel_id)
-    
-    if not req_channel:
-        await update.message.reply_text("❌ This channel is not registered as a req channel!\nUse /req first to register.")
-        return
-    
-    # Get all post channels
-    post_channels = db.get_post_channels()
-    
-    if not post_channels:
-        await update.message.reply_text("❌ No post channels configured!")
-        return
-    
-    global bot_username
-    if not bot_username:
-        bot_username = (await context.bot.get_me()).username
-    
-    # Send post to each post channel
-    success_count = 0
-    failed_channels = []
-    
-    for post_channel_id, post_channel_name in post_channels:
+    def get_channel_name(self, context: CallbackContext, channel_id: str) -> str:
+        """Get channel name by ID"""
         try:
-            # Get request link for this specific post channel
-            request_link = db.get_request_link_for_post(
-                req_channel_id,
-                post_channel_id,
-                bot_username
-            )
+            chat = context.bot.get_chat(channel_id)
+            return chat.title
+        except Exception as e:
+            logger.error(f"Error getting channel name: {e}")
+            return f"Channel {channel_id}"
+    
+    def add_channel(self, update: Update, context: CallbackContext):
+        """Add a channel to database"""
+        user_id = update.effective_user.id
+        
+        # Check if user is admin
+        if not self.is_admin(user_id):
+            update.message.reply_text("❌ You are not authorized to use this command.")
+            return
+        
+        # Check if channel ID is provided
+        if not context.args:
+            update.message.reply_text("Usage: /add <channel_id>")
+            return
+        
+        channel_id = context.args[0]
+        
+        try:
+            # Check if bot is admin in the channel
+            chat_member = context.bot.get_chat_member(channel_id, context.bot.id)
+            if chat_member.status not in ['administrator', 'creator']:
+                update.message.reply_text("❌ I must be an admin in that channel!")
+                return
             
-            if not request_link:
-                failed_channels.append(f"{post_channel_name} (No link found)")
-                continue
+            # Get channel name
+            channel_name = self.get_channel_name(context, channel_id)
             
-            # Create inline keyboard with join buttons
-            keyboard = []
-            # You can add multiple buttons if needed
-            for i in range(1, 4):  # Creates 3 buttons as per your requirement
-                keyboard.append([
-                    InlineKeyboardButton(
-                        f"{i} - JOIN",
-                        url=request_link
-                    )
-                ])
+            # Add to database
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
             
-            reply_markup = InlineKeyboardMarkup(keyboard)
+            try:
+                cursor.execute(
+                    "INSERT INTO channels (channel_id, channel_name, added_date) VALUES (?, ?, ?)",
+                    (channel_id, channel_name, datetime.now())
+                )
+                conn.commit()
+                
+                update.message.reply_text(
+                    f"✅ Channel '{channel_name}' added successfully!"
+                )
+            except sqlite3.IntegrityError:
+                update.message.reply_text("⚠️ This channel is already in the database!")
             
-            # Send the post
-            await context.bot.send_message(
-                chat_id=post_channel_id,
-                text=f"📢 **Click here to join**\n\nJoin our channel for more updates!",
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            
-            success_count += 1
+            conn.close()
             
         except Exception as e:
-            logger.error(f"Error sending to {post_channel_name}: {e}")
-            failed_channels.append(f"{post_channel_name} (Error: {str(e)})")
+            logger.error(f"Error adding channel: {e}")
+            update.message.reply_text("❌ Error adding channel. Make sure:\n1. Channel ID is correct\n2. I'm added to that channel")
     
-    # Send report
-    report_text = f"📊 **Send Report**\n\n"
-    report_text += f"✅ Successfully sent to: {success_count} channels\n"
+    def list_channels(self, update: Update, context: CallbackContext):
+        """List all channels with inline buttons to remove"""
+        # Check if user is admin
+        if not self.is_admin(update.effective_user.id):
+            update.message.reply_text("❌ You are not authorized to use this command.")
+            return
+        
+        # Get channels from database
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT channel_id, channel_name FROM channels")
+        channels = cursor.fetchall()
+        conn.close()
+        
+        if not channels:
+            update.message.reply_text("📭 No channels in database. Use /add to add channels.")
+            return
+        
+        # Create inline keyboard
+        keyboard = []
+        for channel_id, channel_name in channels:
+            keyboard.append([
+                InlineKeyboardButton(
+                    text=f"❌ {channel_name}",
+                    callback_data=f"remove_{channel_id}"
+                )
+            ])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        update.message.reply_text(
+            "📋 **Channel List**\nClick on a channel to remove it:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
     
-    if failed_channels:
-        report_text += f"\n❌ Failed to send to:\n"
-        for channel in failed_channels:
-            report_text += f"• {channel}\n"
+    def button_callback(self, update: Update, context: CallbackContext):
+        """Handle inline button callbacks for removing channels"""
+        query = update.callback_query
+        query.answer()
+        
+        # Check if user is admin
+        if not self.is_admin(query.from_user.id):
+            query.edit_message_text("❌ You are not authorized to remove channels.")
+            return
+        
+        # Extract channel_id from callback data
+        channel_id = query.data.replace("remove_", "")
+        
+        # Remove from database
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM channels WHERE channel_id = ?", (channel_id,))
+        deleted = cursor.rowcount
+        conn.commit()
+        conn.close()
+        
+        if deleted:
+            # Get channel name for the message
+            channel_name = self.get_channel_name(context, channel_id)
+            
+            # Update message
+            query.edit_message_text(
+                f"✅ Channel '{channel_name}' removed successfully!\n\nUse /list to see remaining channels."
+            )
+        else:
+            query.edit_message_text("❌ Channel not found in database.")
     
-    await update.message.reply_text(report_text, parse_mode=ParseMode.MARKDOWN)
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show help message."""
-    help_text = """
-🤖 **Bot Commands Guide**
-
-**Owner Commands:**
-• `/add <channel_id>` - Add a post channel
-• `/list` - List all post channels with remove options
-
-**Admin Commands (in channels):**
-• `/req` - Create request links for the current channel
-• `/send` - Send posts to all post channels
-
-**Notes:**
-1. Bot must be admin in all channels
-2. Use /req before /send
-3. Channel IDs should start with -100
-
-**Setup Steps:**
-1. Add bot to your channel as admin
-2. Use /req in your channel
-3. Use /send to post to all registered channels
-"""
-    await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
-
-def main():
-    """Start the bot."""
-    # Create application
-    application = Application.builder().token(BOT_TOKEN).build()
+    def post_start(self, update: Update, context: CallbackContext):
+        """Start the post creation process"""
+        # Check if user is admin
+        if not self.is_admin(update.effective_user.id):
+            update.message.reply_text("❌ You are not authorized to use this command.")
+            return ConversationHandler.END
+        
+        update.message.reply_text(
+            "📝 Please send me the link for the post:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        
+        return LINK
     
-    # Add command handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("setowner", set_owner))
-    application.add_handler(CommandHandler("add", add_channel))
-    application.add_handler(CommandHandler("list", list_channels))
-    application.add_handler(CommandHandler("req", req_command))
-    application.add_handler(CommandHandler("send", send_command))
-    application.add_handler(CommandHandler("help", help_command))
+    def get_link(self, update: Update, context: CallbackContext):
+        """Get link and show channel selection"""
+        link = update.message.text
+        
+        # Validate link (basic validation)
+        if not link.startswith(('http://', 'https://')):
+            update.message.reply_text("❌ Please provide a valid HTTP/HTTPS link.")
+            return LINK
+        
+        # Store link in context
+        context.user_data['post_link'] = link
+        
+        # Get channels from database
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT channel_id, channel_name FROM channels")
+        channels = cursor.fetchall()
+        conn.close()
+        
+        if not channels:
+            update.message.reply_text("❌ No channels in database. Add channels first using /add")
+            return ConversationHandler.END
+        
+        # Create inline keyboard for channel selection
+        keyboard = []
+        
+        # Add "All Channels" button
+        keyboard.append([
+            InlineKeyboardButton(
+                text="🌐 Post to ALL Channels",
+                callback_data="all"
+            )
+        ])
+        
+        # Add individual channel buttons
+        for channel_id, channel_name in channels:
+            keyboard.append([
+                InlineKeyboardButton(
+                    text=f"📢 {channel_name}",
+                    callback_data=f"channel_{channel_id}"
+                )
+            ])
+        
+        # Add cancel button
+        keyboard.append([
+            InlineKeyboardButton(
+                text="❌ Cancel",
+                callback_data="cancel"
+            )
+        ])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Show post preview
+        preview = self.create_post_preview(link)
+        update.message.reply_text(
+            f"📄 **Post Preview:**\n\n{preview}\n\n"
+            "Select where to post:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+        
+        return CHANNEL_SELECTION
     
-    # Add callback query handler for inline buttons
-    application.add_handler(CallbackQueryHandler(button_callback))
+    def create_post_preview(self, link: str) -> str:
+        """Create the post preview with proper formatting"""
+        post_text = (
+            "**✨ Your favourite actress ✨**\n\n"
+            f"[Button 1]({link})\n"
+            f"[Button 2]({link})"
+        )
+        return post_text
     
-    # Set owner on first run
-    if OWNER_ID and OWNER_ID != 'YOUR_USER_ID_HERE':
-        db.add_owner(OWNER_ID)
-        logger.info(f"Owner set to: {OWNER_ID}")
+    def create_post_markup(self, link: str) -> InlineKeyboardMarkup:
+        """Create inline keyboard for the post"""
+        keyboard = [
+            [
+                InlineKeyboardButton("🔗 Link 1", url=link),
+                InlineKeyboardButton("🔗 Link 2", url=link)
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
     
-    # Start the bot
-    print("🤖 Bot is starting...")
-    print("Press Ctrl+C to stop")
+    def channel_selection(self, update: Update, context: CallbackContext):
+        """Handle channel selection for posting"""
+        query = update.callback_query
+        query.answer()
+        
+        if query.data == "cancel":
+            query.edit_message_text("❌ Post cancelled.")
+            return ConversationHandler.END
+        
+        # Get the link from context
+        link = context.user_data.get('post_link')
+        if not link:
+            query.edit_message_text("❌ Error: Link not found.")
+            return ConversationHandler.END
+        
+        # Prepare post
+        post_text = (
+            "**✨ Your favourite actress ✨**\n\n"
+            f"Button 1: {link}\n"
+            f"Button 2: {link}"
+        )
+        
+        post_markup = self.create_post_markup(link)
+        
+        # Get channels
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT channel_id, channel_name FROM channels")
+        channels = cursor.fetchall()
+        conn.close()
+        
+        success_count = 0
+        failed_channels = []
+        
+        if query.data == "all":
+            # Post to all channels
+            for channel_id, channel_name in channels:
+                try:
+                    context.bot.send_message(
+                        chat_id=channel_id,
+                        text=post_text,
+                        parse_mode=ParseMode.MARKDOWN,
+                        reply_markup=post_markup
+                    )
+                    success_count += 1
+                except Exception as e:
+                    logger.error(f"Error posting to {channel_name}: {e}")
+                    failed_channels.append(channel_name)
+            
+            # Send summary
+            summary = f"✅ Posted to {success_count} channel(s)"
+            if failed_channels:
+                summary += f"\n❌ Failed: {', '.join(failed_channels)}"
+            
+            query.edit_message_text(summary)
+        
+        else:
+            # Post to single channel
+            channel_id = query.data.replace("channel_", "")
+            
+            # Find channel name
+            channel_name = ""
+            for cid, cname in channels:
+                if cid == channel_id:
+                    channel_name = cname
+                    break
+            
+            try:
+                context.bot.send_message(
+                    chat_id=channel_id,
+                    text=post_text,
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=post_markup
+                )
+                query.edit_message_text(f"✅ Posted to {channel_name} successfully!")
+            except Exception as e:
+                logger.error(f"Error posting to {channel_name}: {e}")
+                query.edit_message_text(f"❌ Failed to post to {channel_name}")
+        
+        return ConversationHandler.END
     
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    def cancel_post(self, update: Update, context: CallbackContext):
+        """Cancel the post creation process"""
+        update.message.reply_text(
+            "❌ Post creation cancelled.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return ConversationHandler.END
+    
+    def start(self, update: Update, context: CallbackContext):
+        """Send welcome message"""
+        welcome_text = (
+            "🤖 **Channel Manager Bot**\n\n"
+            "**Available Commands:**\n"
+            "/add <channel_id> - Add a channel (Admin only)\n"
+            "/list - List all channels with remove option\n"
+            "/post - Create and post to channels\n\n"
+            "*Note:* Bot must be admin in the channels."
+        )
+        
+        update.message.reply_text(
+            welcome_text,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    def error_handler(self, update: Update, context: CallbackContext):
+        """Log errors"""
+        logger.error(msg="Exception occurred:", exc_info=context.error)
+    
+    def run(self):
+        """Start the bot"""
+        self.updater.start_polling()
+        logger.info("Bot started...")
+        self.updater.idle()
 
 if __name__ == '__main__':
-    main()
+    # Bot token (replace with your actual token)
+    BOT_TOKEN = "7475344193:AAEUN80pI92pOuOELqluZ-KXmBmNSpkK0dE"
+    
+    # Initialize and run bot
+    bot = ChannelBot(BOT_TOKEN)
+    bot.run()
