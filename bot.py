@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import sqlite3
 from datetime import datetime
@@ -5,12 +6,13 @@ from typing import Dict, List, Optional
 
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
-    ParseMode, ReplyKeyboardRemove
+    ReplyKeyboardRemove
 )
 from telegram.ext import (
-    Updater, CommandHandler, MessageHandler, Filters,
-    CallbackQueryHandler, ConversationHandler, CallbackContext
+    Application, CommandHandler, MessageHandler, filters,
+    CallbackQueryHandler, ConversationHandler, ContextTypes
 )
+from telegram.constants import ParseMode
 
 # Enable logging
 logging.basicConfig(
@@ -45,77 +47,79 @@ ADMIN_IDS = [8242413007]  # Replace with actual admin IDs, e.g., [123456789, 987
 
 class ChannelBot:
     def __init__(self, token: str):
-        self.updater = Updater(token)
-        self.dispatcher = self.updater.dispatcher
+        self.token = token
+        self.application = Application.builder().token(token).build()
         
         # Initialize database
         init_db()
         
         # Register handlers
         self.register_handlers()
-        
+    
     def register_handlers(self):
         """Register all bot handlers"""
         # Command handlers
-        self.dispatcher.add_handler(CommandHandler("start", self.start))
-        self.dispatcher.add_handler(CommandHandler("add", self.add_channel))
-        self.dispatcher.add_handler(CommandHandler("list", self.list_channels))
+        self.application.add_handler(CommandHandler("start", self.start))
+        self.application.add_handler(CommandHandler("add", self.add_channel))
+        self.application.add_handler(CommandHandler("list", self.list_channels))
         
         # Conversation handler for /post command
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler('post', self.post_start)],
             states={
-                LINK: [MessageHandler(Filters.text & ~Filters.command, self.get_link)],
+                LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.get_link)],
                 CHANNEL_SELECTION: [CallbackQueryHandler(self.channel_selection)]
             },
-            fallbacks=[CommandHandler('cancel', self.cancel_post)]
+            fallbacks=[CommandHandler('cancel', self.cancel_post)],
+            per_chat=True,
+            per_user=True
         )
-        self.dispatcher.add_handler(conv_handler)
+        self.application.add_handler(conv_handler)
         
         # Callback query handler for removing channels
-        self.dispatcher.add_handler(CallbackQueryHandler(self.button_callback, pattern='^remove_'))
+        self.application.add_handler(CallbackQueryHandler(self.button_callback, pattern='^remove_'))
         
         # Error handler
-        self.dispatcher.add_error_handler(self.error_handler)
+        self.application.add_error_handler(self.error_handler)
     
     def is_admin(self, user_id: int) -> bool:
         """Check if user is admin"""
         return user_id in ADMIN_IDS
     
-    def get_channel_name(self, context: CallbackContext, channel_id: str) -> str:
+    async def get_channel_name(self, context: ContextTypes.DEFAULT_TYPE, channel_id: str) -> str:
         """Get channel name by ID"""
         try:
-            chat = context.bot.get_chat(channel_id)
+            chat = await context.bot.get_chat(channel_id)
             return chat.title
         except Exception as e:
             logger.error(f"Error getting channel name: {e}")
             return f"Channel {channel_id}"
     
-    def add_channel(self, update: Update, context: CallbackContext):
+    async def add_channel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Add a channel to database"""
         user_id = update.effective_user.id
         
         # Check if user is admin
         if not self.is_admin(user_id):
-            update.message.reply_text("❌ You are not authorized to use this command.")
+            await update.message.reply_text("❌ You are not authorized to use this command.")
             return
         
         # Check if channel ID is provided
         if not context.args:
-            update.message.reply_text("Usage: /add <channel_id>")
+            await update.message.reply_text("Usage: /add <channel_id>")
             return
         
         channel_id = context.args[0]
         
         try:
             # Check if bot is admin in the channel
-            chat_member = context.bot.get_chat_member(channel_id, context.bot.id)
+            chat_member = await context.bot.get_chat_member(channel_id, context.bot.id)
             if chat_member.status not in ['administrator', 'creator']:
-                update.message.reply_text("❌ I must be an admin in that channel!")
+                await update.message.reply_text("❌ I must be an admin in that channel!")
                 return
             
             # Get channel name
-            channel_name = self.get_channel_name(context, channel_id)
+            channel_name = await self.get_channel_name(context, channel_id)
             
             # Add to database
             conn = sqlite3.connect(DB_NAME)
@@ -128,23 +132,23 @@ class ChannelBot:
                 )
                 conn.commit()
                 
-                update.message.reply_text(
+                await update.message.reply_text(
                     f"✅ Channel '{channel_name}' added successfully!"
                 )
             except sqlite3.IntegrityError:
-                update.message.reply_text("⚠️ This channel is already in the database!")
+                await update.message.reply_text("⚠️ This channel is already in the database!")
             
             conn.close()
             
         except Exception as e:
             logger.error(f"Error adding channel: {e}")
-            update.message.reply_text("❌ Error adding channel. Make sure:\n1. Channel ID is correct\n2. I'm added to that channel")
+            await update.message.reply_text("❌ Error adding channel. Make sure:\n1. Channel ID is correct\n2. I'm added to that channel")
     
-    def list_channels(self, update: Update, context: CallbackContext):
+    async def list_channels(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """List all channels with inline buttons to remove"""
         # Check if user is admin
         if not self.is_admin(update.effective_user.id):
-            update.message.reply_text("❌ You are not authorized to use this command.")
+            await update.message.reply_text("❌ You are not authorized to use this command.")
             return
         
         # Get channels from database
@@ -155,7 +159,7 @@ class ChannelBot:
         conn.close()
         
         if not channels:
-            update.message.reply_text("📭 No channels in database. Use /add to add channels.")
+            await update.message.reply_text("📭 No channels in database. Use /add to add channels.")
             return
         
         # Create inline keyboard
@@ -170,20 +174,20 @@ class ChannelBot:
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        update.message.reply_text(
+        await update.message.reply_text(
             "📋 **Channel List**\nClick on a channel to remove it:",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=reply_markup
         )
     
-    def button_callback(self, update: Update, context: CallbackContext):
+    async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle inline button callbacks for removing channels"""
         query = update.callback_query
-        query.answer()
+        await query.answer()
         
         # Check if user is admin
         if not self.is_admin(query.from_user.id):
-            query.edit_message_text("❌ You are not authorized to remove channels.")
+            await query.edit_message_text("❌ You are not authorized to remove channels.")
             return
         
         # Extract channel_id from callback data
@@ -199,36 +203,36 @@ class ChannelBot:
         
         if deleted:
             # Get channel name for the message
-            channel_name = self.get_channel_name(context, channel_id)
+            channel_name = await self.get_channel_name(context, channel_id)
             
             # Update message
-            query.edit_message_text(
+            await query.edit_message_text(
                 f"✅ Channel '{channel_name}' removed successfully!\n\nUse /list to see remaining channels."
             )
         else:
-            query.edit_message_text("❌ Channel not found in database.")
+            await query.edit_message_text("❌ Channel not found in database.")
     
-    def post_start(self, update: Update, context: CallbackContext):
+    async def post_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Start the post creation process"""
         # Check if user is admin
         if not self.is_admin(update.effective_user.id):
-            update.message.reply_text("❌ You are not authorized to use this command.")
+            await update.message.reply_text("❌ You are not authorized to use this command.")
             return ConversationHandler.END
         
-        update.message.reply_text(
+        await update.message.reply_text(
             "📝 Please send me the link for the post:",
             reply_markup=ReplyKeyboardRemove()
         )
         
         return LINK
     
-    def get_link(self, update: Update, context: CallbackContext):
+    async def get_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Get link and show channel selection"""
         link = update.message.text
         
         # Validate link (basic validation)
         if not link.startswith(('http://', 'https://')):
-            update.message.reply_text("❌ Please provide a valid HTTP/HTTPS link.")
+            await update.message.reply_text("❌ Please provide a valid HTTP/HTTPS link.")
             return LINK
         
         # Store link in context
@@ -242,7 +246,7 @@ class ChannelBot:
         conn.close()
         
         if not channels:
-            update.message.reply_text("❌ No channels in database. Add channels first using /add")
+            await update.message.reply_text("❌ No channels in database. Add channels first using /add")
             return ConversationHandler.END
         
         # Create inline keyboard for channel selection
@@ -277,7 +281,7 @@ class ChannelBot:
         
         # Show post preview
         preview = self.create_post_preview(link)
-        update.message.reply_text(
+        await update.message.reply_text(
             f"📄 **Post Preview:**\n\n{preview}\n\n"
             "Select where to post:",
             parse_mode=ParseMode.MARKDOWN,
@@ -305,19 +309,19 @@ class ChannelBot:
         ]
         return InlineKeyboardMarkup(keyboard)
     
-    def channel_selection(self, update: Update, context: CallbackContext):
+    async def channel_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Handle channel selection for posting"""
         query = update.callback_query
-        query.answer()
+        await query.answer()
         
         if query.data == "cancel":
-            query.edit_message_text("❌ Post cancelled.")
+            await query.edit_message_text("❌ Post cancelled.")
             return ConversationHandler.END
         
         # Get the link from context
         link = context.user_data.get('post_link')
         if not link:
-            query.edit_message_text("❌ Error: Link not found.")
+            await query.edit_message_text("❌ Error: Link not found.")
             return ConversationHandler.END
         
         # Prepare post
@@ -343,7 +347,7 @@ class ChannelBot:
             # Post to all channels
             for channel_id, channel_name in channels:
                 try:
-                    context.bot.send_message(
+                    await context.bot.send_message(
                         chat_id=channel_id,
                         text=post_text,
                         parse_mode=ParseMode.MARKDOWN,
@@ -359,7 +363,7 @@ class ChannelBot:
             if failed_channels:
                 summary += f"\n❌ Failed: {', '.join(failed_channels)}"
             
-            query.edit_message_text(summary)
+            await query.edit_message_text(summary)
         
         else:
             # Post to single channel
@@ -373,28 +377,28 @@ class ChannelBot:
                     break
             
             try:
-                context.bot.send_message(
+                await context.bot.send_message(
                     chat_id=channel_id,
                     text=post_text,
                     parse_mode=ParseMode.MARKDOWN,
                     reply_markup=post_markup
                 )
-                query.edit_message_text(f"✅ Posted to {channel_name} successfully!")
+                await query.edit_message_text(f"✅ Posted to {channel_name} successfully!")
             except Exception as e:
                 logger.error(f"Error posting to {channel_name}: {e}")
-                query.edit_message_text(f"❌ Failed to post to {channel_name}")
+                await query.edit_message_text(f"❌ Failed to post to {channel_name}")
         
         return ConversationHandler.END
     
-    def cancel_post(self, update: Update, context: CallbackContext):
+    async def cancel_post(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Cancel the post creation process"""
-        update.message.reply_text(
+        await update.message.reply_text(
             "❌ Post creation cancelled.",
             reply_markup=ReplyKeyboardRemove()
         )
         return ConversationHandler.END
     
-    def start(self, update: Update, context: CallbackContext):
+    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Send welcome message"""
         welcome_text = (
             "🤖 **Channel Manager Bot**\n\n"
@@ -405,25 +409,32 @@ class ChannelBot:
             "*Note:* Bot must be admin in the channels."
         )
         
-        update.message.reply_text(
+        await update.message.reply_text(
             welcome_text,
             parse_mode=ParseMode.MARKDOWN
         )
     
-    def error_handler(self, update: Update, context: CallbackContext):
+    async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Log errors"""
         logger.error(msg="Exception occurred:", exc_info=context.error)
     
     def run(self):
         """Start the bot"""
-        self.updater.start_polling()
-        logger.info("Bot started...")
-        self.updater.idle()
+        self.application.run_polling()
 
-if __name__ == '__main__':
+async def main():
     # Bot token (replace with your actual token)
     BOT_TOKEN = "7475344193:AAEUN80pI92pOuOELqluZ-KXmBmNSpkK0dE"
     
     # Initialize and run bot
     bot = ChannelBot(BOT_TOKEN)
-    bot.run()
+    await bot.application.initialize()
+    await bot.application.start()
+    await bot.application.updater.start_polling()
+    logger.info("Bot started...")
+    
+    # Keep the bot running
+    await asyncio.Event().wait()
+
+if __name__ == '__main__':
+    asyncio.run(main())
