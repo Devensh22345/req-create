@@ -168,8 +168,8 @@ class Database:
 db = Database()
 
 # Bot setup
-BOT_TOKEN = os.getenv('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
-OWNER_ID = os.getenv('OWNER_ID', 'YOUR_USER_ID_HERE')  # Replace with your Telegram user ID
+BOT_TOKEN = os.getenv('BOT_TOKEN', '7732000256:AAEhvG8504KcDrD0FZ44AEoiTEhEJjXuQfg')
+OWNER_ID = os.getenv('OWNER_ID', '6872968794')  # Replace with your Telegram user ID
 
 # Store bot username globally
 bot_username = None
