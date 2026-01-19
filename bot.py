@@ -288,14 +288,12 @@ def create_post_text(link: str) -> str:
 def create_post_markup(link: str) -> InlineKeyboardMarkup:
     """Create inline keyboard for the post"""
     keyboard = [
-        [
             [InlineKeyboardButton("𝗖𝗢𝗠𝗔𝗧𝗢𝗭𝗭𝗘", url=link)],
             [InlineKeyboardButton("𝗘𝗩𝗔 𝗘𝗟𝗙𝗜𝗘", url=link)],
             [InlineKeyboardButton("𝗔𝗡𝗚𝗘𝗟𝗔 𝗪𝗛𝗜𝗧𝗘", url=link)],
             [InlineKeyboardButton("𝗦𝗨𝗡𝗡𝗬 𝗟𝗘𝗢𝗡", url=link)],
             [InlineKeyboardButton("𝗠𝗜𝗔 𝗠𝗔𝗟𝗞𝗢𝗩𝗔", url=link)],
             [InlineKeyboardButton("𝗠𝗜𝗔 𝗞𝗛𝗔𝗟𝗜𝗙𝗔", url=link)]
-        ]
     ]
     return InlineKeyboardMarkup(keyboard)
 
