@@ -281,7 +281,7 @@ def get_link(update: Update, context: CallbackContext):
 def create_post_text(link: str) -> str:
     """Create the post text with proper formatting"""
     post_text = (
-        "**𝗪𝗵𝗼 𝗜𝘀 𝗬𝗼𝘂𝗿 𝗙𝗮𝘃𝗼𝘂𝗿𝗮𝘁𝗲 𝗔𝗰𝘁𝗿𝗲𝘀𝘀 ?** </b>"
+        "**𝗪𝗵𝗼 𝗜𝘀 𝗬𝗼𝘂𝗿 𝗙𝗮𝘃𝗼𝘂𝗿𝗮𝘁𝗲 𝗔𝗰𝘁𝗿𝗲𝘀𝘀 ?** 😍"
     )
     return post_text
 
