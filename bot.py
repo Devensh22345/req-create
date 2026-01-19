@@ -281,9 +281,7 @@ def get_link(update: Update, context: CallbackContext):
 def create_post_text(link: str) -> str:
     """Create the post text with proper formatting"""
     post_text = (
-        "**✨ Your favourite actress ✨**\n\n"
-        f"Button 1: {link}\n"
-        f"Button 2: {link}"
+        "**𝒘𝒉𝒐 𝒊𝒔 𝒚𝒐𝒖𝒓 𝒇𝒂𝒗𝒐𝒖𝒓𝒂𝒕𝒆 𝒂𝒄𝒕𝒓𝒆𝒔𝒔 ?**\n\n"
     )
     return post_text
 
@@ -291,8 +289,12 @@ def create_post_markup(link: str) -> InlineKeyboardMarkup:
     """Create inline keyboard for the post"""
     keyboard = [
         [
-            InlineKeyboardButton("🔗 Link 1", url=link),
-            InlineKeyboardButton("🔗 Link 2", url=link)
+            InlineKeyboardButton("𝗖𝗢𝗠𝗔𝗧𝗢𝗭𝗭𝗘", url=link),
+            InlineKeyboardButton("𝗘𝗩𝗔 𝗘𝗟𝗙𝗜𝗘", url=link),
+            InlineKeyboardButton("𝗔𝗡𝗚𝗘𝗟𝗔 𝗪𝗛𝗜𝗧𝗘", url=link),
+            InlineKeyboardButton("𝗦𝗨𝗡𝗡𝗬 𝗟𝗘𝗢𝗡", url=link),
+            InlineKeyboardButton("𝗠𝗜𝗔 𝗠𝗔𝗟𝗞𝗢𝗩𝗔", url=link),
+            InlineKeyboardButton("𝗠𝗜𝗔 𝗞𝗛𝗔𝗟𝗜𝗙𝗔", url=link)
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
