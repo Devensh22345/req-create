@@ -281,19 +281,22 @@ def get_link(update: Update, context: CallbackContext):
 def create_post_text(link: str) -> str:
     """Create the post text with proper formatting"""
     post_text = (
-        "**𝗪𝗵𝗼 𝗜𝘀 𝗬𝗼𝘂𝗿 𝗙𝗮𝘃𝗼𝘂𝗿𝗮𝘁𝗲 𝗔𝗰𝘁𝗿𝗲𝘀𝘀 ?** 😍"
+        "**𝗪𝗵𝗮𝘁 𝗟𝗮𝗻𝗴𝘂𝗮𝗴𝗲 𝗗𝗼 𝘆𝗼𝘂 𝗪𝗮𝘁𝗰𝗵 𝗠𝗼𝘃𝗶𝗲𝘀? ?** 😍"
     )
     return post_text
 
 def create_post_markup(link: str) -> InlineKeyboardMarkup:
     """Create inline keyboard for the post"""
     keyboard = [
-            [InlineKeyboardButton("𝗖𝗢𝗠𝗔𝗧𝗢𝗭𝗭𝗘", url=link)],
-            [InlineKeyboardButton("𝗘𝗩𝗔 𝗘𝗟𝗙𝗜𝗘", url=link)],
-            [InlineKeyboardButton("𝗔𝗡𝗚𝗘𝗟𝗔 𝗪𝗛𝗜𝗧𝗘", url=link)],
-            [InlineKeyboardButton("𝗦𝗨𝗡𝗡𝗬 𝗟𝗘𝗢𝗡", url=link)],
-            [InlineKeyboardButton("𝗠𝗜𝗔 𝗠𝗔𝗟𝗞𝗢𝗩𝗔", url=link)],
-            [InlineKeyboardButton("𝗠𝗜𝗔 𝗞𝗛𝗔𝗟𝗜𝗙𝗔", url=link)]
+            [InlineKeyboardButton("𝗘𝗻𝗴𝗹𝗶𝘀𝗵", url=link)],
+            [InlineKeyboardButton("𝗛𝗶𝗻𝗱𝗶", url=link)],
+            [InlineKeyboardButton("𝗥𝘂𝘀𝘀𝗶𝗮𝗻", url=link)],
+            [InlineKeyboardButton("𝗝𝗮𝗽𝗮𝗻𝗲𝘀𝗲", url=link)],
+            [InlineKeyboardButton("𝗞𝗼𝗿𝗲𝗮𝗻", url=link)],
+            [InlineKeyboardButton("𝗖𝗵𝗶𝗻𝗲𝗮𝘀", url=link)],
+            [InlineKeyboardButton("𝗨𝗿𝗱𝘂", url=link)],
+            [InlineKeyboardButton("𝗧𝗲𝗹𝘂𝗴𝘂", url=link)],
+            [InlineKeyboardButton("𝗠𝗮𝗹𝗮𝘆𝗮𝗹𝗮𝗺", url=link)]
     ]
     return InlineKeyboardMarkup(keyboard)
 
